@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Pump 交易监控</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: #0f1115;
+            color: #e8ecf1;
+        }
+        .container {
+            max-width: 1500px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .top-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-right: 12px;
+        }
+        .input {
+            height: 40px;
+            width: 320px;
+            border: 1px solid #2b3240;
+            border-radius: 10px;
+            background: #171b22;
+            color: #fff;
+            padding: 0 12px;
+            outline: none;
+        }
+        .small-input {
+            height: 40px;
+            width: 180px;
+            border: 1px solid #2b3240;
+            border-radius: 10px;
+            background: #171b22;
+            color: #fff;
+            padding: 0 12px;
+            outline: none;
+        }
+        .btn {
+            height: 40px;
+            padding: 0 16px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            background: #2563eb;
+            color: #fff;
+            font-size: 14px;
+        }
+        .btn:hover { opacity: 0.92; }
+
+        .push-panel,
+        .condition-panel {
+            margin-bottom: 16px;
+            background: #171b22;
+            border: 1px solid #252c38;
+            border-radius: 14px;
+            overflow: hidden;
+        }
+        .push-header,
+        .condition-header {
+            padding: 14px 16px;
+            font-size: 18px;
+            font-weight: 700;
+            border-bottom: 1px solid #252c38;
+            background: #1b2029;
+        }
+        .push-body,
+        .condition-body {
+            padding: 14px;
+        }
+        .push-row,
+        .condition-row {
+            display: flex;
+            gap: 12px;
+            align-items: end;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+        .push-item,
+        .condition-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .push-label,
+        .condition-label {
+            color: #8fa1b8;
+            font-size: 13px;
+        }
+        .switch-line {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            height: 40px;
+        }
+
+        .condition-result-panel {
+            margin-top: 10px;
+            background: #11151b;
+            border: 1px solid #2a3140;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .condition-result-header {
+            padding: 12px 14px;
+            font-size: 16px;
+            font-weight: 700;
+            border-bottom: 1px solid #252c38;
+            background: #141922;
+        }
+        .condition-summary {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            padding: 12px 14px;
+            border-bottom: 1px solid #252c38;
+            color: #d7dee7;
+            font-size: 13px;
+        }
+        .condition-summary span {
+            color: #8fa1b8;
+            margin-right: 6px;
+        }
+
+        .main {
+            display: grid;
+            grid-template-columns: 420px 1fr;
+            gap: 16px;
+        }
+
+        .panel {
+            background: #171b22;
+            border: 1px solid #252c38;
+            border-radius: 14px;
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 14px 16px;
+            font-size: 18px;
+            font-weight: 700;
+            border-bottom: 1px solid #252c38;
+            background: #1b2029;
+        }
+        .panel-body { padding: 14px; }
+
+        .token-list {
+            max-height: 78vh;
+            overflow-y: auto;
+        }
+        .token-item {
+            border: 1px solid #2a3140;
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            background: #11151b;
+        }
+        .token-item:hover { border-color: #3b82f6; }
+        .token-item.active {
+            border-color: #3b82f6;
+            background: #162032;
+        }
+        .mint {
+            font-size: 13px;
+            color: #8fa1b8;
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+        .token-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px 12px;
+            font-size: 13px;
+            color: #d7dee7;
+        }
+
+        .summary-box {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .summary-card {
+            background: #11151b;
+            border: 1px solid #2a3140;
+            border-radius: 12px;
+            padding: 12px;
+        }
+        .summary-title {
+            color: #8fa1b8;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .summary-value {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 1150px;
+        }
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #252c38;
+            text-align: left;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        th {
+            color: #8fa1b8;
+            background: #141922;
+            position: sticky;
+            top: 0;
+        }
+
+        .buy { color: #22c55e; font-weight: 700; }
+        .sell { color: #ef4444; font-weight: 700; }
+        .profit-pos { color: #22c55e; font-weight: 700; }
+        .profit-neg { color: #ef4444; font-weight: 700; }
+        .muted { color: #8fa1b8; }
+
+        .pager {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: flex-end;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+        .pager button {
+            height: 34px;
+            min-width: 70px;
+            border: none;
+            border-radius: 8px;
+            background: #2563eb;
+            color: #fff;
+            cursor: pointer;
+        }
+        .pager button:disabled {
+            background: #334155;
+            cursor: not-allowed;
+        }
+
+        .empty {
+            padding: 30px;
+            text-align: center;
+            color: #8fa1b8;
+        }
+
+        .highlight-blue {
+            background: rgba(59, 130, 246, 0.16);
+        }
+
+        .profit-panel {
+            margin-top: 16px;
+            background: #11151b;
+            border: 1px solid #2a3140;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .profit-header {
+            padding: 12px 14px;
+            font-size: 16px;
+            font-weight: 700;
+            border-bottom: 1px solid #252c38;
+            background: #141922;
+        }
+        .profit-summary {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            padding: 12px 14px;
+            border-bottom: 1px solid #252c38;
+            color: #d7dee7;
+            font-size: 13px;
+        }
+        .profit-summary span {
+            color: #8fa1b8;
+            margin-right: 6px;
+        }
+        .profit-table { min-width: 700px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="top-bar">
+        <div class="title">Pump 交易监控</div>
+        <input id="keyword" class="input" placeholder="搜索 mint">
+        <button class="btn" onclick="reloadTokens()">搜索</button>
+    </div>
+
+    <div class="push-panel">
+        <div class="push-header">钉钉推送设置</div>
+        <div class="push-body">
+            <div class="push-row">
+                <div class="push-item">
+                    <div class="push-label">最低利润（SOL）</div>
+                    <input id="pushMinProfit" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <div class="push-item">
+                    <div class="push-label">最低首笔买入Gas（SOL）</div>
+                    <input id="pushMinGas" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <div class="push-item">
+                    <div class="push-label">推送开关</div>
+                    <label class="switch-line">
+                        <input id="pushEnabled" type="checkbox">
+                        <span>启用钉钉推送</span>
+                    </label>
+                </div>
+                <button class="btn" onclick="savePushConfig()">一键更新推送参数</button>
+                <button class="btn" onclick="testDingtalkPush()">钉钉推送测试</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="condition-panel">
+        <div class="condition-header">条件查询</div>
+        <div class="condition-body">
+            <div class="condition-row">
+                <div class="condition-item">
+                    <div class="condition-label">最低利润（SOL）</div>
+                    <input id="conditionMinProfit" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <div class="condition-item">
+                    <div class="condition-label">最低首笔买入Gas（SOL）</div>
+                    <input id="conditionMinGas" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <button class="btn" onclick="runConditionQuery(1)">开始查询</button>
+            </div>
+
+            <div class="condition-result-panel">
+                <div class="condition-result-header">查询结果</div>
+                <div id="conditionSummary" class="condition-summary"></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>代币合约</th>
+                            <th>创建者</th>
+                            <th>创建时间</th>
+                            <th>创建区块</th>
+                            <th>符合条件的交易者</th>
+                            <th>利润(SOL)</th>
+                            <th>首笔买入Gas(SOL)</th>
+                            <th>区块</th>
+                        </tr>
+                        </thead>
+                        <tbody id="conditionTableBody">
+                        <tr><td colspan="8" class="empty">请点击开始查询</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pager">
+                    <button id="conditionPrevBtn" onclick="changeConditionPage(-1)">上一页</button>
+                    <span id="conditionPageInfo" class="muted">-</span>
+                    <button id="conditionNextBtn" onclick="changeConditionPage(1)">下一页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="main">
+        <div class="panel">
+            <div class="panel-header">币列表（按创建时间最近到最远）</div>
+            <div class="panel-body">
+                <div id="tokenList" class="token-list"></div>
+                <div class="pager">
+                    <button id="tokenPrevBtn" onclick="changeTokenPage(-1)">上一页</button>
+                    <span id="tokenPageInfo" class="muted">-</span>
+                    <button id="tokenNextBtn" onclick="changeTokenPage(1)">下一页</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">交易明细</div>
+            <div class="panel-body">
+                <div id="summaryBox" class="summary-box"></div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>方向</th>
+                            <th>区块</th>
+                            <th>Gas(SOL)</th>
+                            <th>钱包</th>
+                            <th>Mint</th>
+                            <th>Token数量</th>
+                            <th>SOL数量</th>
+                            <th>价格(SOL)</th>
+                            <th>哈希</th>
+                        </tr>
+                        </thead>
+                        <tbody id="tradeTableBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="pager">
+                    <button id="tradePrevBtn" onclick="changeTradePage(-1)">上一页</button>
+                    <span id="tradePageInfo" class="muted">-</span>
+                    <button id="tradeNextBtn" onclick="changeTradePage(1)">下一页</button>
+                </div>
+
+                <div class="profit-panel">
+                    <div class="profit-header">60秒利润结算（单位：SOL）</div>
+                    <div id="profitSummary" class="profit-summary"></div>
+                    <div class="table-wrap">
+                        <table class="profit-table">
+                            <thead>
+                            <tr>
+                                <th>钱包</th>
+                                <th>买入SOL</th>
+                                <th>卖出SOL</th>
+                                <th>利润(SOL)</th>
+                            </tr>
+                            </thead>
+                            <tbody id="profitTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let tokenPage = 1;
+    const tokenPageSize = 20;
+    let tokenTotal = 0;
+
+    let tradePage = 1;
+    const tradePageSize = 50;
+    let tradeTotal = 0;
+
+    let conditionPage = 1;
+    const conditionPageSize = 20;
+    let conditionTotal = 0;
+
+    let currentMint = "";
+
+    function formatNum(v, digits = 6) {
+        if (v === null || v === undefined || v === "") return "-";
+        const n = Number(v);
+        if (Number.isNaN(n)) return v;
+        return n.toFixed(digits);
+    }
+
+    function shortText(v, len = 12) {
+        if (!v) return "-";
+        if (v.length <= len * 2) return v;
+        return v.slice(0, len) + "..." + v.slice(-len);
+    }
+
+    async function fetchJson(url, options = {}) {
+        const res = await fetch(url, options);
+        return await res.json();
+    }
+
+    async function loadPushConfig() {
+        const res = await fetchJson("/api/push_config");
+        if (!res.success) return;
+
+        const cfg = res.data || {};
+        document.getElementById("pushMinProfit").value = cfg.min_profit_sol ?? 0;
+        document.getElementById("pushMinGas").value = cfg.min_gas_sol ?? 0;
+        document.getElementById("pushEnabled").checked = Number(cfg.dingtalk_enabled || 0) === 1;
+    }
+
+    async function savePushConfig() {
+        const minProfit = Number(document.getElementById("pushMinProfit").value || 0);
+        const minGas = Number(document.getElementById("pushMinGas").value || 0);
+        const enabled = document.getElementById("pushEnabled").checked;
+
+        const res = await fetch("/api/push_config", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                min_profit_sol: minProfit,
+                min_gas_sol: minGas,
+                dingtalk_enabled: enabled
+            })
+        });
+
+        const data = await res.json();
+        alert(data.message || (data.success ? "更新成功" : "更新失败"));
+    }
+
+    async function testDingtalkPush() {
+        const res = await fetch("/api/test_dingtalk_push", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"}
+        });
+        const data = await res.json();
+        alert(data.message || (data.success ? "测试成功" : "测试失败"));
+    }
+
+    async function loadTokens() {
+        const keyword = document.getElementById("keyword").value.trim();
+        const url = `/api/tokens?page=${tokenPage}&page_size=${tokenPageSize}&keyword=${encodeURIComponent(keyword)}`;
+        const res = await fetchJson(url);
+
+        if (!res.success) return;
+
+        tokenTotal = res.total || 0;
+        const list = res.data || [];
+        const el = document.getElementById("tokenList");
+
+        if (!list.length) {
+            el.innerHTML = `<div class="empty">暂无数据</div>`;
+        } else {
+            el.innerHTML = list.map(item => `
+                <div class="token-item ${currentMint === item.mint ? 'active' : ''}" onclick="selectMint('${item.mint}')">
+                    <div class="mint">${item.mint}</div>
+                    <div class="token-stats">
+                        <div>创建: ${item.created_time || '-'}</div>
+                        <div>创建区块: ${item.created_slot ?? '-'}</div>
+                        <div>首次: ${item.first_seen || '-'}</div>
+                        <div>最后: ${item.last_seen || '-'}</div>
+                        <div>买入笔数: ${item.buy_count || 0}</div>
+                        <div>卖出笔数: ${item.sell_count || 0}</div>
+                        <div>买入SOL: ${formatNum(item.buy_sol || 0, 4)}</div>
+                        <div>卖出SOL: ${formatNum(item.sell_sol || 0, 4)}</div>
+                    </div>
+                </div>
+            `).join("");
+        }
+
+        const totalPages = Math.max(1, Math.ceil(tokenTotal / tokenPageSize));
+        document.getElementById("tokenPageInfo").innerText = `第 ${tokenPage} / ${totalPages} 页，共 ${tokenTotal} 条`;
+        document.getElementById("tokenPrevBtn").disabled = tokenPage <= 1;
+        document.getElementById("tokenNextBtn").disabled = tokenPage >= totalPages;
+
+        if (!currentMint && list.length) {
+            selectMint(list[0].mint);
+        }
+    }
+
+    async function loadTrades() {
+        if (!currentMint) {
+            document.getElementById("summaryBox").innerHTML = "";
+            document.getElementById("tradeTableBody").innerHTML = `<tr><td colspan="10" class="empty">请先选择一个币</td></tr>`;
+            return;
+        }
+
+        const url = `/api/trades?mint=${encodeURIComponent(currentMint)}&page=${tradePage}&page_size=${tradePageSize}`;
+        const res = await fetchJson(url);
+
+        if (!res.success) return;
+
+        tradeTotal = res.total || 0;
+        const rows = res.data || [];
+        const summary = res.summary || {};
+
+        document.getElementById("summaryBox").innerHTML = `
+            <div class="summary-card">
+                <div class="summary-title">Mint</div>
+                <div class="summary-value" style="font-size:13px;word-break:break-all;">${currentMint}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-title">创建时间</div>
+                <div class="summary-value" style="font-size:14px;">${summary.created_time || '-'}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-title">创建区块</div>
+                <div class="summary-value" style="font-size:14px;">${summary.created_slot ?? '-'}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-title">总交易</div>
+                <div class="summary-value">${summary.total_count || 0}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-title">买入笔数</div>
+                <div class="summary-value buy">${summary.buy_count || 0}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-title">卖出笔数</div>
+                <div class="summary-value sell">${summary.sell_count || 0}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-title">买/卖SOL</div>
+                <div class="summary-value" style="font-size:14px;">
+                    ${formatNum(summary.buy_sol || 0, 4)} / ${formatNum(summary.sell_sol || 0, 4)}
+                </div>
+            </div>
+        `;
+
+        const tbody = document.getElementById("tradeTableBody");
+
+        if (!rows.length) {
+            tbody.innerHTML = `<tr><td colspan="10" class="empty">暂无交易</td></tr>`;
+        } else {
+            tbody.innerHTML = rows.map(row => `
+                <tr class="${row.highlight_blue ? 'highlight-blue' : ''}">
+                    <td>${row.event_time || '-'}</td>
+                    <td class="${row.side === 'BUY' ? 'buy' : 'sell'}">${row.side || '-'}</td>
+                    <td>${row.slot ?? '-'}</td>
+                    <td>${formatNum(row.gas_fee_sol || 0, 6)}</td>
+                    <td title="${row.signer || ''}">${shortText(row.signer || '', 10)}</td>
+                    <td title="${row.mint || ''}">${shortText(row.mint || '', 10)}</td>
+                    <td>${formatNum(row.token_amount || 0, 6)}</td>
+                    <td>${formatNum(row.sol_amount || 0, 6)}</td>
+                    <td>${formatNum(row.price_sol || 0, 10)}</td>
+                    <td title="${row.signature || ''}">${shortText(row.signature || '', 10)}</td>
+                </tr>
+            `).join("");
+        }
+
+        const totalPages = Math.max(1, Math.ceil(tradeTotal / tradePageSize));
+        document.getElementById("tradePageInfo").innerText = `第 ${tradePage} / ${totalPages} 页，共 ${tradeTotal} 条`;
+        document.getElementById("tradePrevBtn").disabled = tradePage <= 1;
+        document.getElementById("tradeNextBtn").disabled = tradePage >= totalPages;
+    }
+
+    async function loadProfit60s() {
+        const summaryEl = document.getElementById("profitSummary");
+        const tbody = document.getElementById("profitTableBody");
+
+        if (!currentMint) {
+            summaryEl.innerHTML = "";
+            tbody.innerHTML = `<tr><td colspan="4" class="empty">请先选择一个币</td></tr>`;
+            return;
+        }
+
+        const url = `/api/buyer_profit_60s?mint=${encodeURIComponent(currentMint)}`;
+        const res = await fetchJson(url);
+
+        if (!res.success) {
+            summaryEl.innerHTML = "";
+            tbody.innerHTML = `<tr><td colspan="4" class="empty">利润数据加载失败</td></tr>`;
+            return;
+        }
+
+        const rows = res.data || [];
+
+        if (!rows.length) {
+            summaryEl.innerHTML = `<div><span>状态</span>60秒尚未结算或暂无数据</div>`;
+            tbody.innerHTML = `<tr><td colspan="4" class="empty">暂无利润数据</td></tr>`;
+            return;
+        }
+
+        let totalBuy = 0;
+        let totalSell = 0;
+        let totalProfit = 0;
+
+        rows.forEach(row => {
+            totalBuy += Number(row.buy_sol || 0);
+            totalSell += Number(row.sell_sol || 0);
+            totalProfit += Number(row.profit_sol || 0);
+        });
+
+        summaryEl.innerHTML = `
+            <div><span>人数</span>${rows.length}</div>
+            <div><span>总买入</span>${formatNum(totalBuy, 6)} SOL</div>
+            <div><span>总卖出</span>${formatNum(totalSell, 6)} SOL</div>
+            <div><span>总利润</span>${formatNum(totalProfit, 6)} SOL</div>
+        `;
+
+        tbody.innerHTML = rows.map(row => `
+            <tr>
+                <td title="${row.buyer || ''}">${shortText(row.buyer || '', 12)}</td>
+                <td>${formatNum(row.buy_sol || 0, 6)}</td>
+                <td>${formatNum(row.sell_sol || 0, 6)}</td>
+                <td class="${Number(row.profit_sol || 0) >= 0 ? 'profit-pos' : 'profit-neg'}">
+                    ${formatNum(row.profit_sol || 0, 6)}
+                </td>
+            </tr>
+        `).join("");
+    }
+
+    async function runConditionQuery(page = 1) {
+        conditionPage = page;
+
+        const minProfit = Number(document.getElementById("conditionMinProfit").value || 0);
+        const minGas = Number(document.getElementById("conditionMinGas").value || 0);
+
+        const summaryEl = document.getElementById("conditionSummary");
+        const bodyEl = document.getElementById("conditionTableBody");
+
+        summaryEl.innerHTML = `<div><span>状态</span>查询中...</div>`;
+        bodyEl.innerHTML = `<tr><td colspan="8" class="empty">查询中...</td></tr>`;
+
+        const res = await fetch("/api/condition_query", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                min_profit_sol: minProfit,
+                min_gas_sol: minGas,
+                page: conditionPage,
+                page_size: conditionPageSize
+            })
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+            summaryEl.innerHTML = `<div><span>状态</span>查询失败</div>`;
+            bodyEl.innerHTML = `<tr><td colspan="8" class="empty">查询失败</td></tr>`;
+            return;
+        }
+
+        conditionTotal = data.count || 0;
+
+        summaryEl.innerHTML = `
+            <div><span>命中代币数</span>${data.count || 0}</div>
+            <div><span>最低利润</span>${formatNum(minProfit, 6)} SOL</div>
+            <div><span>最低首笔Gas</span>${formatNum(minGas, 6)} SOL</div>
+        `;
+
+        const rows = data.data || [];
+
+        if (!rows.length) {
+            bodyEl.innerHTML = `<tr><td colspan="8" class="empty">暂无符合条件的数据</td></tr>`;
+        } else {
+            bodyEl.innerHTML = rows.map(row => `
+                <tr>
+                    <td>${row.mint || '-'}</td>
+                    <td>${row.creator || '-'}</td>
+                    <td>${row.created_time || '-'}</td>
+                    <td>${row.created_slot ?? '-'}</td>
+                    <td>${row.buyer || '-'}</td>
+                    <td class="${Number(row.profit_sol || 0) >= 0 ? 'profit-pos' : 'profit-neg'}">${formatNum(row.profit_sol || 0, 6)}</td>
+                    <td>${formatNum(row.gas_sol || 0, 6)}</td>
+                    <td>${row.buyer_slot ?? '-'}</td>
+                </tr>
+            `).join("");
+        }
+
+        const totalPages = Math.max(1, Math.ceil(conditionTotal / conditionPageSize));
+        document.getElementById("conditionPageInfo").innerText = `第 ${conditionPage} / ${totalPages} 页，共 ${conditionTotal} 条`;
+        document.getElementById("conditionPrevBtn").disabled = conditionPage <= 1;
+        document.getElementById("conditionNextBtn").disabled = conditionPage >= totalPages;
+    }
+
+    function changeConditionPage(delta) {
+        const totalPages = Math.max(1, Math.ceil(conditionTotal / conditionPageSize));
+        const next = conditionPage + delta;
+        if (next < 1 || next > totalPages) return;
+        runConditionQuery(next);
+    }
+
+    function selectMint(mint) {
+        currentMint = mint;
+        tradePage = 1;
+        loadTokens();
+        loadTrades();
+        loadProfit60s();
+    }
+
+    function changeTokenPage(delta) {
+        const totalPages = Math.max(1, Math.ceil(tokenTotal / tokenPageSize));
+        const next = tokenPage + delta;
+        if (next < 1 || next > totalPages) return;
+        tokenPage = next;
+        loadTokens();
+    }
+
+    function changeTradePage(delta) {
+        const totalPages = Math.max(1, Math.ceil(tradeTotal / tradePageSize));
+        const next = tradePage + delta;
+        if (next < 1 || next > totalPages) return;
+        tradePage = next;
+        loadTrades();
+    }
+
+    function reloadTokens() {
+        tokenPage = 1;
+        currentMint = "";
+        tradePage = 1;
+        loadTokens();
+        loadTrades();
+        loadProfit60s();
+    }
+
+    document.getElementById("keyword").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") reloadTokens();
+    });
+
+    loadPushConfig();
+    loadTokens();
+    loadTrades();
+    loadProfit60s();
+    runConditionQuery(1);
+
+    setInterval(() => {
+        loadTokens();
+        if (currentMint) {
+            loadTrades();
+            loadProfit60s();
+        }
+    }, 5000);
+</script>
+</body>
+</html>
