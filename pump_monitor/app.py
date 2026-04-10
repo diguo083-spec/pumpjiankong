@@ -1,3 +1,4 @@
+
 import base64
 import hashlib
 import hmac
@@ -14,7 +15,12 @@ import websocket
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 
-from condition_query import find_condition_candidates, find_first_condition_candidate_for_mint
+from condition_query import (
+    find_condition_candidates,
+    find_first_condition_candidate_for_mint,
+    find_second_condition_candidates,
+    find_first_second_condition_candidate_for_mint,
+)
 
 # =========================
 # 基础配置
@@ -24,6 +30,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 API_KEY = os.getenv("HELIUS_API_KEY", "").strip()
 WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={API_KEY}"
+RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={API_KEY}"
 
 PUMP_PROGRAM_ID = os.getenv("PUMP_PROGRAM_ID", "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P").strip()
 
@@ -37,6 +44,11 @@ WEB_PORT = int(os.getenv("WEB_PORT", "5001"))
 
 DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK", "").strip()
 DINGTALK_SECRET = os.getenv("DINGTALK_SECRET", "").strip()
+DINGTALK_KEYWORD = os.getenv("DINGTALK_KEYWORD", "").strip()
+
+SECOND_DINGTALK_WEBHOOK = os.getenv("SECOND_DINGTALK_WEBHOOK", "").strip()
+SECOND_DINGTALK_SECRET = os.getenv("SECOND_DINGTALK_SECRET", "").strip()
+SECOND_DINGTALK_KEYWORD = os.getenv("SECOND_DINGTALK_KEYWORD", "").strip()
 
 app = Flask(__name__)
 
@@ -165,6 +177,61 @@ def init_db():
             """)
 
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS failed_trades (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    signature VARCHAR(120) UNIQUE,
+                    mint VARCHAR(100) NULL,
+                    event_time DATETIME NULL,
+                    slot BIGINT NULL,
+                    signer VARCHAR(100) NULL,
+                    gas_fee_sol DOUBLE DEFAULT 0,
+                    created_at DATETIME NULL,
+                    INDEX idx_failed_mint (mint),
+                    INDEX idx_failed_event_time (event_time),
+                    INDEX idx_failed_slot (slot),
+                    INDEX idx_failed_signer (signer)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS failed_trades_v2 (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    signature VARCHAR(120) NOT NULL,
+                    mint VARCHAR(100) NOT NULL,
+                    event_time DATETIME NULL,
+                    slot BIGINT NULL,
+                    signer VARCHAR(100) NULL,
+                    gas_fee_sol DOUBLE DEFAULT 0,
+                    created_at DATETIME NULL,
+                    UNIQUE KEY uniq_failed_sig_mint (signature, mint),
+                    INDEX idx_failed_v2_mint (mint),
+                    INDEX idx_failed_v2_event_time (event_time),
+                    INDEX idx_failed_v2_slot (slot),
+                    INDEX idx_failed_v2_signer (signer),
+                    INDEX idx_failed_v2_created_at (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS failed_trade_tasks (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    mint VARCHAR(100) NOT NULL,
+                    created_slot BIGINT NOT NULL,
+                    end_slot BIGINT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    retries INT DEFAULT 0,
+                    last_scan_slot BIGINT NULL,
+                    last_error VARCHAR(255) NULL,
+                    created_at DATETIME NULL,
+                    updated_at DATETIME NULL,
+                    UNIQUE KEY uniq_failed_task_mint (mint),
+                    INDEX idx_failed_task_status (status),
+                    INDEX idx_failed_task_created_slot (created_slot),
+                    INDEX idx_failed_task_end_slot (end_slot)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS buyer_profit_60s (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
                     mint VARCHAR(100) NOT NULL,
@@ -189,6 +256,35 @@ def init_db():
                     min_profit_sol DOUBLE DEFAULT 0,
                     min_gas_sol DOUBLE DEFAULT 0,
                     dingtalk_enabled TINYINT(1) DEFAULT 1,
+                    updated_at DATETIME NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS second_push_config (
+                    id INT PRIMARY KEY,
+                    min_profit_sol DOUBLE DEFAULT 0,
+                    min_gas_sol DOUBLE DEFAULT 0,
+                    dingtalk_enabled TINYINT(1) DEFAULT 1,
+                    updated_at DATETIME NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS blacklist_addresses (
+                    address VARCHAR(100) PRIMARY KEY,
+                    note VARCHAR(255) NULL,
+                    created_at DATETIME NULL,
+                    updated_at DATETIME NULL,
+                    INDEX idx_blacklist_created_at (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS cleanup_config (
+                    id INT PRIMARY KEY,
+                    cleanup_hours DOUBLE DEFAULT 24,
                     updated_at DATETIME NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
@@ -225,6 +321,12 @@ def init_db():
         )
         ensure_column_exists(
             conn,
+            "token_stats",
+            "pushed_second_dingtalk",
+            "ALTER TABLE token_stats ADD COLUMN pushed_second_dingtalk TINYINT(1) DEFAULT 0 AFTER pushed_dingtalk"
+        )
+        ensure_column_exists(
+            conn,
             "trades",
             "slot",
             "ALTER TABLE trades ADD COLUMN slot BIGINT NULL AFTER event_time"
@@ -240,6 +342,16 @@ def init_db():
             cur.execute("""
                 INSERT INTO push_config (id, min_profit_sol, min_gas_sol, dingtalk_enabled, updated_at)
                 VALUES (1, 0, 0, 1, %s)
+                ON DUPLICATE KEY UPDATE id = id
+            """, (now_str(),))
+            cur.execute("""
+                INSERT INTO second_push_config (id, min_profit_sol, min_gas_sol, dingtalk_enabled, updated_at)
+                VALUES (1, 0, 0, 1, %s)
+                ON DUPLICATE KEY UPDATE id = id
+            """, (now_str(),))
+            cur.execute("""
+                INSERT INTO cleanup_config (id, cleanup_hours, updated_at)
+                VALUES (1, 24, %s)
                 ON DUPLICATE KEY UPDATE id = id
             """, (now_str(),))
 
@@ -280,32 +392,112 @@ def update_push_config(conn, min_profit_sol, min_gas_sol, dingtalk_enabled):
         """, (min_profit_sol, min_gas_sol, dingtalk_enabled, now_str()))
 
 
-def build_dingtalk_url():
-    if not DINGTALK_WEBHOOK:
-        raise RuntimeError("未配置 DINGTALK_WEBHOOK")
 
-    if not DINGTALK_SECRET:
-        return DINGTALK_WEBHOOK
+def get_second_push_config(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, min_profit_sol, min_gas_sol, dingtalk_enabled, updated_at
+            FROM second_push_config
+            WHERE id = 1
+        """)
+        row = cur.fetchone()
+        if row:
+            return row
+        return {
+            "id": 1,
+            "min_profit_sol": 0,
+            "min_gas_sol": 0,
+            "dingtalk_enabled": 1,
+            "updated_at": None
+        }
+
+
+def update_second_push_config(conn, min_profit_sol, min_gas_sol, dingtalk_enabled):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO second_push_config (id, min_profit_sol, min_gas_sol, dingtalk_enabled, updated_at)
+            VALUES (1, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                min_profit_sol = VALUES(min_profit_sol),
+                min_gas_sol = VALUES(min_gas_sol),
+                dingtalk_enabled = VALUES(dingtalk_enabled),
+                updated_at = VALUES(updated_at)
+        """, (min_profit_sol, min_gas_sol, dingtalk_enabled, now_str()))
+
+
+def get_cleanup_config(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, cleanup_hours, updated_at
+            FROM cleanup_config
+            WHERE id = 1
+        """)
+        row = cur.fetchone()
+        if row:
+            return row
+        return {"id": 1, "cleanup_hours": 24, "updated_at": None}
+
+
+def update_cleanup_config(conn, cleanup_hours):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO cleanup_config (id, cleanup_hours, updated_at)
+            VALUES (1, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                cleanup_hours = VALUES(cleanup_hours),
+                updated_at = VALUES(updated_at)
+        """, (cleanup_hours, now_str()))
+
+
+def list_blacklist_addresses(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT address, note, created_at, updated_at
+            FROM blacklist_addresses
+            ORDER BY created_at DESC, address ASC
+        """)
+        return cur.fetchall()
+
+
+def add_blacklist_address(conn, address, note=""):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO blacklist_addresses (address, note, created_at, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                note = VALUES(note),
+                updated_at = VALUES(updated_at)
+        """, (address, note or None, now_str(), now_str()))
+
+
+def delete_blacklist_address(conn, address):
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM blacklist_addresses WHERE address = %s", (address,))
+        return cur.rowcount
+
+
+def build_dingtalk_url_with_secret(webhook, secret):
+    if not webhook:
+        raise RuntimeError("未配置钉钉 Webhook")
+
+    if not secret:
+        return webhook
 
     timestamp = str(int(time.time() * 1000))
-    string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
+    string_to_sign = f"{timestamp}\n{secret}"
     hmac_code = hmac.new(
-        DINGTALK_SECRET.encode("utf-8"),
+        secret.encode("utf-8"),
         string_to_sign.encode("utf-8"),
         digestmod=hashlib.sha256
     ).digest()
     sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
-    return f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
+    return f"{webhook}&timestamp={timestamp}&sign={sign}"
 
 
-def send_dingtalk_text(content):
-    url = build_dingtalk_url()
-    payload = {
-        "msgtype": "text",
-        "text": {
-            "content": content
-        }
-    }
+def send_dingtalk_text_to_robot(content, webhook, secret="", keyword=""):
+    url = build_dingtalk_url_with_secret(webhook, secret)
+    final_content = f"{keyword}\n{content}" if keyword else content
+    payload = {"msgtype": "text", "text": {"content": final_content}}
     resp = requests.post(url, json=payload, timeout=10)
     resp.raise_for_status()
     data = resp.json()
@@ -314,9 +506,17 @@ def send_dingtalk_text(content):
     return data
 
 
+def send_dingtalk_text(content):
+    return send_dingtalk_text_to_robot(
+        content=content,
+        webhook=DINGTALK_WEBHOOK,
+        secret=DINGTALK_SECRET,
+        keyword=DINGTALK_KEYWORD,
+    )
+
+
 def send_condition_match_dingtalk(candidate, min_profit_sol, min_gas_sol):
     content = (
-        "hb\n"
         "Pump 条件命中提醒\n"
         f"代币合约: {candidate['mint']}\n"
         f"创建者: {candidate['creator']}\n"
@@ -410,7 +610,22 @@ def extract_signer(account_keys):
     for item in account_keys or []:
         if isinstance(item, dict) and item.get("signer") is True:
             return item.get("pubkey")
+        if isinstance(item, str):
+            continue
     return None
+
+
+def value_exists_in_obj(obj, target):
+    if target in (None, ""):
+        return False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if value_exists_in_obj(k, target) or value_exists_in_obj(v, target):
+                return True
+        return False
+    if isinstance(obj, list):
+        return any(value_exists_in_obj(x, target) for x in obj)
+    return str(obj) == str(target)
 
 
 def normalize_token_balances(items):
@@ -536,6 +751,310 @@ def choose_create_token_change(changes, signer):
     return candidates[0][1]
 
 
+def rpc_call(method, params):
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    resp = requests.post(RPC_URL, json=payload, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("error"):
+        raise RuntimeError(f"RPC错误: {data['error']}")
+    return data.get("result")
+
+
+def fetch_transaction_by_signature(signature):
+    return rpc_call("getTransaction", [
+        signature,
+        {
+            "encoding": "jsonParsed",
+            "maxSupportedTransactionVersion": 0,
+            "commitment": "confirmed"
+        }
+    ])
+
+
+def fetch_recent_program_signatures(limit=1000):
+    return rpc_call("getSignaturesForAddress", [
+        PUMP_PROGRAM_ID,
+        {
+            "limit": limit,
+            "commitment": "confirmed"
+        }
+    ]) or []
+
+
+def fetch_current_slot():
+    return rpc_call("getSlot", [{"commitment": "confirmed"}])
+
+
+def find_failed_trade_mint_by_slot_and_result(slot, result):
+    if slot is None:
+        return None
+
+    lower_slot = max(int(slot) - 2, 0)
+    upper_slot = int(slot)
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT mint, created_slot
+                FROM token_stats
+                WHERE created_slot BETWEEN %s AND %s
+                ORDER BY created_slot DESC
+            """, (lower_slot, upper_slot))
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        mint = row.get("mint")
+        created_slot = row.get("created_slot")
+        if not mint or created_slot is None:
+            continue
+        created_slot = int(created_slot)
+        if not (created_slot <= int(slot) <= created_slot + 2):
+            continue
+        if value_exists_in_obj(result, mint):
+            return mint
+    return None
+
+
+def parse_failed_realtime_message(msg):
+    params = msg.get("params", {}) or {}
+    result = params.get("result", {}) or {}
+    if not result:
+        return None
+
+    signature = result.get("signature")
+    slot = result.get("slot")
+
+    tx = result.get("transaction", {}) or {}
+    meta = tx.get("meta", {}) or {}
+    if not meta.get("err"):
+        return None
+
+    transaction = tx.get("transaction", {}) or {}
+    message = transaction.get("message", {}) or {}
+    account_keys = message.get("accountKeys", []) or []
+
+    mint = find_failed_trade_mint_by_slot_and_result(slot, result)
+    if not mint:
+        return None
+
+    signer = extract_signer(account_keys)
+    if not signer and account_keys:
+        first = account_keys[0]
+        if isinstance(first, dict):
+            signer = first.get("pubkey")
+        elif isinstance(first, str):
+            signer = first
+
+    block_time = result.get("blockTime")
+    event_time = utc_ms_to_local_str(block_time * 1000) if block_time else now_str()
+    gas_fee_sol = lamports_to_sol(meta.get("fee"))
+
+    return {
+        "signature": signature,
+        "mint": mint,
+        "event_time": event_time,
+        "slot": slot,
+        "signer": signer,
+        "gas_fee_sol": gas_fee_sol,
+    }
+
+
+def parse_failed_signature_brief(signature, mint):
+    result = fetch_transaction_by_signature(signature)
+    if not result:
+        return None
+
+    slot = result.get("slot")
+    block_time = result.get("blockTime")
+
+    tx = result.get("transaction", {}) or {}
+    meta = tx.get("meta", {}) or {}
+    transaction = tx.get("transaction", {}) or {}
+    message = transaction.get("message", {}) or {}
+    account_keys = message.get("accountKeys", []) or []
+
+    signer = extract_signer(account_keys)
+    gas_fee_sol = lamports_to_sol(meta.get("fee"))
+    event_time = utc_ms_to_local_str(block_time * 1000) if block_time else now_str()
+
+    return {
+        "signature": signature,
+        "mint": mint,
+        "event_time": event_time,
+        "slot": slot,
+        "signer": signer,
+        "gas_fee_sol": gas_fee_sol,
+    }
+
+
+def save_failed_trade(parsed):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO failed_trades_v2 (
+                    signature, mint, event_time, slot, signer, gas_fee_sol, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                parsed["signature"],
+                parsed["mint"],
+                parsed["event_time"],
+                parsed["slot"],
+                parsed["signer"],
+                parsed["gas_fee_sol"],
+                now_str()
+            ))
+        conn.commit()
+        return True
+    except pymysql.err.IntegrityError:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def enqueue_failed_trade_task(parsed_create):
+    mint = parsed_create["mint"]
+    created_slot = parsed_create.get("slot")
+    if created_slot is None:
+        return
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO failed_trade_tasks (
+                    mint, created_slot, end_slot, status, retries, last_scan_slot, last_error, created_at, updated_at
+                ) VALUES (%s, %s, %s, 'pending', 0, NULL, NULL, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    created_slot = VALUES(created_slot),
+                    end_slot = VALUES(end_slot),
+                    status = 'pending',
+                    updated_at = VALUES(updated_at)
+            """, (
+                mint,
+                created_slot,
+                created_slot + 2,
+                now_str(),
+                now_str()
+            ))
+        conn.commit()
+        print(f"[{now_str()}] 已登记失败交易任务: mint={mint}, slot_range=[{created_slot},{created_slot + 2}]")
+    finally:
+        conn.close()
+
+
+def process_failed_trade_tasks_once():
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, mint, created_slot, end_slot, status, retries
+                FROM failed_trade_tasks
+                WHERE status = 'pending'
+                ORDER BY id ASC
+                LIMIT 100
+            """)
+            tasks = cur.fetchall()
+
+        if not tasks:
+            return
+
+        try:
+            current_slot = fetch_current_slot()
+        except Exception as e:
+            current_slot = None
+            print(f"[{now_str()}] 当前slot获取失败: {e}")
+
+        try:
+            sig_rows = fetch_recent_program_signatures(limit=1000)
+        except Exception as e:
+            print(f"[{now_str()}] 失败交易签名拉取异常: {e}")
+            return
+
+        for task in tasks:
+            task_id = task["id"]
+            mint = task["mint"]
+            created_slot = int(task["created_slot"])
+            end_slot = int(task["end_slot"])
+            retries = int(task.get("retries") or 0)
+
+            matched_rows = []
+            for row in sig_rows:
+                slot = row.get("slot")
+                signature = row.get("signature")
+                err = row.get("err")
+                if signature and err and slot is not None and created_slot <= int(slot) <= end_slot:
+                    matched_rows.append(row)
+
+            inserted_count = 0
+            for row in matched_rows:
+                signature = row.get("signature")
+                try:
+                    parsed = parse_failed_signature_brief(signature, mint)
+                    if not parsed:
+                        continue
+                    if save_failed_trade(parsed):
+                        inserted_count += 1
+                except Exception as e:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE failed_trade_tasks
+                            SET retries = %s,
+                                last_scan_slot = %s,
+                                last_error = %s,
+                                updated_at = %s
+                            WHERE id = %s
+                        """, (retries + 1, current_slot, str(e)[:255], now_str(), task_id))
+                    conn.commit()
+                    print(f"[{now_str()}] 失败交易签名解析异常: mint={mint}, signature={signature}, err={e}")
+
+            done = False
+            if current_slot is not None and current_slot >= end_slot + 2:
+                done = True
+            if retries >= 60:
+                done = True
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE failed_trade_tasks
+                    SET retries = %s,
+                        last_scan_slot = %s,
+                        last_error = NULL,
+                        status = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                """, (
+                    retries + 1,
+                    current_slot,
+                    'done' if done else 'pending',
+                    now_str(),
+                    task_id
+                ))
+            conn.commit()
+
+            if matched_rows or done:
+                print(
+                    f"[{now_str()}] 失败任务扫描: mint={mint}, slot_range=[{created_slot},{end_slot}], "
+                    f"matched={len(matched_rows)}, inserted={inserted_count}, current_slot={current_slot}, done={done}"
+                )
+    finally:
+        conn.close()
+
+
+def failed_trade_worker_loop():
+    while True:
+        try:
+            process_failed_trade_tasks_once()
+        except Exception as e:
+            print(f"[{now_str()}] 失败交易线程异常: {e}")
+        time.sleep(2)
+
+
 def save_create_event(parsed_create):
     conn = get_conn()
     try:
@@ -586,7 +1105,7 @@ def save_create_event(parsed_create):
 
 def save_trade(parsed):
     """
-    pump6.0 主规则保持不变：
+    pump7.0 主规则保持不变：
     1. 只有 mint 已经存在于 token_stats，才允许入库。
     2. 只入库创建时间起 60 秒内的交易。
     3. event_time 必须是链上实际 blockTime 转出的时间。
@@ -665,6 +1184,76 @@ def save_trade(parsed):
         return True
     finally:
         conn.close()
+
+
+
+
+def send_second_condition_match_dingtalk(candidate, min_profit_sol, min_gas_sol):
+    content = (
+        "Pump 第二逻辑命中提醒\n"
+        f"代币合约: {candidate['mint']}\n"
+        f"创建者: {candidate['creator']}\n"
+        f"创建时间: {candidate['created_time']}\n"
+        f"创建区块: {candidate['created_slot']}\n"
+        f"符合条件的交易者: {candidate['buyer']}\n"
+        f"利润(SOL): {candidate['profit_sol']}\n"
+        f"首笔买入Gas(SOL): {candidate['gas_sol']}\n"
+        f"区块: {candidate['buyer_slot']}\n"
+        f"首笔买入时间: {candidate['first_buy_time']}\n"
+        f"当前推送阈值 => 最低利润: {min_profit_sol}, 最低首笔Gas: {min_gas_sol}"
+    )
+    return send_dingtalk_text_to_robot(
+        content=content,
+        webhook=SECOND_DINGTALK_WEBHOOK,
+        secret=SECOND_DINGTALK_SECRET,
+        keyword=SECOND_DINGTALK_KEYWORD,
+    )
+
+
+def process_second_dingtalk_push_for_mint(conn, mint):
+    cfg = get_second_push_config(conn)
+    if not int(cfg.get("dingtalk_enabled") or 0):
+        return
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT pushed_second_dingtalk
+            FROM token_stats
+            WHERE mint = %s
+        """, (mint,))
+        row = cur.fetchone()
+
+    if not row:
+        return
+    if int(row.get("pushed_second_dingtalk") or 0) == 1:
+        return
+
+    blacklist_rows = list_blacklist_addresses(conn)
+    blacklist_addresses = [x.get("address") for x in blacklist_rows if x.get("address")]
+
+    candidate = find_first_second_condition_candidate_for_mint(
+        conn=conn,
+        mint=mint,
+        min_profit_sol=float(cfg.get("min_profit_sol") or 0),
+        min_gas_sol=float(cfg.get("min_gas_sol") or 0),
+        blacklist_addresses=blacklist_addresses,
+    )
+
+    if candidate:
+        send_second_condition_match_dingtalk(
+            candidate=candidate,
+            min_profit_sol=float(cfg.get("min_profit_sol") or 0),
+            min_gas_sol=float(cfg.get("min_gas_sol") or 0),
+        )
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE token_stats
+            SET pushed_second_dingtalk = 1,
+                updated_at = %s
+            WHERE mint = %s
+        """, (now_str(), mint))
+    conn.commit()
 
 
 def parse_create_message(msg):
@@ -854,31 +1443,116 @@ def settle_buyer_profit_60s_once():
             except Exception as push_err:
                 print(f"[{now_str()}] 钉钉推送异常: mint={mint}, err={push_err}")
 
+            try:
+                process_second_dingtalk_push_for_mint(conn, mint)
+            except Exception as push_err:
+                print(f"[{now_str()}] 第二钉钉推送异常: mint={mint}, err={push_err}")
+
     finally:
         conn.close()
 
 
-def cleanup_older_than_24h_once():
-    cutoff = now_dt() - timedelta(hours=24)
+def cleanup_older_than_hours_once(cleanup_hours=24, optimize_tables=False):
+    cleanup_hours = float(cleanup_hours or 24)
+    cutoff = now_dt() - timedelta(hours=cleanup_hours)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM buyer_profit_60s WHERE created_at < %s", (cutoff,))
+            cur.execute(
+                """
+                SELECT mint
+                FROM token_stats
+                WHERE created_time IS NOT NULL
+                  AND created_time < %s
+                """,
+                (cutoff,)
+            )
+            old_mints = [str((row or {}).get("mint") or "").strip() for row in cur.fetchall() or []]
+            old_mints = [m for m in old_mints if m]
+
+            if not old_mints:
+                result = {
+                    "deleted_mints": 0,
+                    "deleted_profit": 0,
+                    "deleted_trades": 0,
+                    "deleted_failed": 0,
+                    "deleted_failed_legacy": 0,
+                    "deleted_failed_tasks": 0,
+                    "deleted_tokens": 0,
+                    "optimized_tables": [],
+                    "cutoff": cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+                    "cleanup_hours": cleanup_hours,
+                }
+                print(f"[CLEANUP] hours={cleanup_hours}, cutoff={result['cutoff']}, matched_mints=0")
+                return result
+
+            placeholders = ",".join(["%s"] * len(old_mints))
+
+            cur.execute(f"DELETE FROM buyer_profit_60s WHERE mint IN ({placeholders})", old_mints)
             deleted_profit = cur.rowcount
 
-            cur.execute("DELETE FROM trades WHERE created_at < %s", (cutoff,))
+            cur.execute(f"DELETE FROM trades WHERE mint IN ({placeholders})", old_mints)
             deleted_trades = cur.rowcount
 
-            cur.execute("DELETE FROM token_stats WHERE created_time < %s", (cutoff,))
+            cur.execute(f"DELETE FROM failed_trades_v2 WHERE mint IN ({placeholders})", old_mints)
+            deleted_failed = cur.rowcount
+
+            deleted_failed_legacy = 0
+            try:
+                cur.execute(f"DELETE FROM failed_trades WHERE mint IN ({placeholders})", old_mints)
+                deleted_failed_legacy = cur.rowcount
+            except Exception:
+                deleted_failed_legacy = 0
+
+            cur.execute(f"DELETE FROM failed_trade_tasks WHERE mint IN ({placeholders})", old_mints)
+            deleted_failed_tasks = cur.rowcount
+
+            cur.execute(f"DELETE FROM token_stats WHERE mint IN ({placeholders})", old_mints)
             deleted_tokens = cur.rowcount
 
         conn.commit()
 
-        if deleted_profit or deleted_trades or deleted_tokens:
-            print(
-                f"[CLEANUP_24H] deleted_profit={deleted_profit}, "
-                f"deleted_trades={deleted_trades}, deleted_tokens={deleted_tokens}"
-            )
+        optimized_tables = []
+        if optimize_tables and (deleted_profit or deleted_trades or deleted_failed or deleted_failed_legacy or deleted_failed_tasks or deleted_tokens):
+            tables_to_optimize = [
+                "buyer_profit_60s",
+                "trades",
+                "failed_trades_v2",
+                "failed_trade_tasks",
+                "token_stats",
+            ]
+            if deleted_failed_legacy:
+                tables_to_optimize.insert(3, "failed_trades")
+            with conn.cursor() as cur:
+                for table_name in tables_to_optimize:
+                    try:
+                        cur.execute(f"OPTIMIZE TABLE {table_name}")
+                        optimized_tables.append(table_name)
+                    except Exception as opt_err:
+                        print(f"[CLEANUP] OPTIMIZE {table_name} 失败: {opt_err}")
+            conn.commit()
+
+        result = {
+            "deleted_mints": len(old_mints),
+            "deleted_profit": deleted_profit,
+            "deleted_trades": deleted_trades,
+            "deleted_failed": deleted_failed,
+            "deleted_failed_legacy": deleted_failed_legacy,
+            "deleted_failed_tasks": deleted_failed_tasks,
+            "deleted_tokens": deleted_tokens,
+            "optimized_tables": optimized_tables,
+            "cutoff": cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+            "cleanup_hours": cleanup_hours,
+        }
+
+        print(
+            f"[CLEANUP] hours={cleanup_hours}, cutoff={result['cutoff']}, deleted_mints={len(old_mints)}, "
+            f"deleted_profit={deleted_profit}, deleted_trades={deleted_trades}, "
+            f"deleted_failed={deleted_failed}, deleted_failed_legacy={deleted_failed_legacy}, "
+            f"deleted_failed_tasks={deleted_failed_tasks}, deleted_tokens={deleted_tokens}, "
+            f"optimized={','.join(optimized_tables) if optimized_tables else 'none'}"
+        )
+        return result
     finally:
         conn.close()
 
@@ -887,7 +1561,12 @@ def maintenance_loop():
     while True:
         try:
             settle_buyer_profit_60s_once()
-            cleanup_older_than_24h_once()
+            conn = get_conn()
+            try:
+                cfg = get_cleanup_config(conn)
+            finally:
+                conn.close()
+            cleanup_older_than_hours_once(float(cfg.get("cleanup_hours") or 24), optimize_tables=False)
         except Exception as e:
             print(f"[{now_str()}] 维护任务异常: {e}")
         time.sleep(10)
@@ -918,6 +1597,33 @@ def on_open(ws):
 
     ws.send(json.dumps(sub_msg))
     print(f"[{now_str()}] 已订阅 Pump 买卖交易")
+
+
+def on_open_failed(ws):
+    print(f"[{now_str()}] 已连接 Helius 失败交易 WebSocket")
+
+    sub_msg = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "transactionSubscribe",
+        "params": [
+            {
+                "accountInclude": [PUMP_PROGRAM_ID],
+                "failed": True,
+                "vote": False
+            },
+            {
+                "commitment": "processed",
+                "encoding": "jsonParsed",
+                "transactionDetails": "full",
+                "showRewards": False,
+                "maxSupportedTransactionVersion": 0
+            }
+        ]
+    }
+
+    ws.send(json.dumps(sub_msg))
+    print(f"[{now_str()}] 已订阅 Pump 失败交易")
 
 
 def on_message(ws, message):
@@ -957,6 +1663,34 @@ def on_message(ws, message):
         print(f"[{now_str()}] 消息解析异常: {e}")
 
 
+def on_message_failed(ws, message):
+    try:
+        data = json.loads(message)
+
+        if "result" in data and "id" in data and "params" not in data:
+            print(f"[{now_str()}] 失败交易订阅成功：{data['result']}")
+            return
+
+        parsed = parse_failed_realtime_message(data)
+        if not parsed:
+            return
+
+        inserted = save_failed_trade(parsed)
+        if not inserted:
+            return
+
+        print("=" * 100)
+        print(f"[{parsed['event_time']}] FAILED")
+        print(f"Mint: {parsed['mint']}")
+        print(f"钱包: {parsed['signer']}")
+        print(f"签名: {parsed['signature']}")
+        print(f"区块: {parsed['slot']}")
+        print(f"Gas费(SOL): {float(parsed['gas_fee_sol'] or 0):.6f}")
+        print("=" * 100)
+    except Exception as e:
+        print(f"[{now_str()}] 失败交易消息解析异常: {e}")
+
+
 def on_error(ws, error):
     print(f"[{now_str()}] WebSocket错误: {error}")
 
@@ -984,6 +1718,25 @@ def run_ws_forever():
         time.sleep(3)
 
 
+def run_failed_ws_forever():
+    while True:
+        try:
+            ws = websocket.WebSocketApp(
+                WS_URL,
+                on_open=on_open_failed,
+                on_message=on_message_failed,
+                on_error=on_error,
+                on_close=on_close
+            )
+            ws.run_forever(ping_interval=60, ping_timeout=10)
+        except KeyboardInterrupt:
+            print("手动停止")
+            break
+        except Exception as e:
+            print(f"[{now_str()}] 失败交易运行异常，3秒后重连: {e}")
+        time.sleep(3)
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -1008,10 +1761,17 @@ def api_tokens():
                 total = cur.fetchone()["cnt"]
 
                 cur.execute("""
-                    SELECT *
-                    FROM token_stats
-                    WHERE mint LIKE %s
-                    ORDER BY (created_time IS NULL) ASC, created_time DESC, last_seen DESC
+                    SELECT
+                        ts.*,
+                        COALESCE(ft.failed_count, 0) AS failed_count
+                    FROM token_stats ts
+                    LEFT JOIN (
+                        SELECT mint, COUNT(*) AS failed_count
+                        FROM failed_trades_v2
+                        GROUP BY mint
+                    ) ft ON ts.mint = ft.mint
+                    WHERE ts.mint LIKE %s
+                    ORDER BY (ts.created_time IS NULL) ASC, ts.created_time DESC, ts.last_seen DESC
                     LIMIT %s OFFSET %s
                 """, (f"%{keyword}%", page_size, offset))
                 rows = cur.fetchall()
@@ -1020,12 +1780,23 @@ def api_tokens():
                 total = cur.fetchone()["cnt"]
 
                 cur.execute("""
-                    SELECT *
-                    FROM token_stats
-                    ORDER BY (created_time IS NULL) ASC, created_time DESC, last_seen DESC
+                    SELECT
+                        ts.*,
+                        COALESCE(ft.failed_count, 0) AS failed_count
+                    FROM token_stats ts
+                    LEFT JOIN (
+                        SELECT mint, COUNT(*) AS failed_count
+                        FROM failed_trades_v2
+                        GROUP BY mint
+                    ) ft ON ts.mint = ft.mint
+                    ORDER BY (ts.created_time IS NULL) ASC, ts.created_time DESC, ts.last_seen DESC
                     LIMIT %s OFFSET %s
                 """, (page_size, offset))
                 rows = cur.fetchall()
+
+        for row in rows:
+            row["success_count"] = int(row.get("buy_count") or 0) + int(row.get("sell_count") or 0)
+            row["total_count"] = row["success_count"] + int(row.get("failed_count") or 0)
 
         return jsonify({
             "success": True,
@@ -1042,7 +1813,7 @@ def api_tokens():
 def api_trades():
     mint = request.args.get("mint", "").strip()
     page = int(request.args.get("page", 1))
-    page_size = int(request.args.get("page_size", 50))
+    page_size = int(request.args.get("page_size", 100))
     offset = (page - 1) * page_size
 
     if not mint:
@@ -1056,19 +1827,47 @@ def api_trades():
             token_row = cur.fetchone()
             created_slot = token_row["created_slot"] if token_row else None
 
-            cur.execute(
-                "SELECT COUNT(*) AS cnt FROM trades WHERE mint = %s",
-                (mint,)
-            )
-            total = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) AS cnt FROM trades WHERE mint = %s", (mint,))
+            normal_total = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT COUNT(*) AS cnt FROM failed_trades_v2 WHERE mint = %s", (mint,))
+            failed_total = cur.fetchone()["cnt"]
+
+            total = normal_total + failed_total
 
             cur.execute("""
-                SELECT *
+                SELECT
+                    signature,
+                    event_time,
+                    slot,
+                    side,
+                    signer,
+                    mint,
+                    token_amount,
+                    sol_amount,
+                    price_sol,
+                    gas_fee_sol,
+                    0 AS is_failed
                 FROM trades
                 WHERE mint = %s
-                ORDER BY id DESC
+                UNION ALL
+                SELECT
+                    signature,
+                    event_time,
+                    slot,
+                    'FAILED' AS side,
+                    signer,
+                    mint,
+                    NULL AS token_amount,
+                    NULL AS sol_amount,
+                    NULL AS price_sol,
+                    gas_fee_sol,
+                    1 AS is_failed
+                FROM failed_trades_v2
+                WHERE mint = %s
+                ORDER BY event_time DESC
                 LIMIT %s OFFSET %s
-            """, (mint, page_size, offset))
+            """, (mint, mint, page_size, offset))
             rows = cur.fetchall()
 
             cur.execute("""
@@ -1081,14 +1880,17 @@ def api_trades():
                 FROM trades
                 WHERE mint = %s
             """, (mint,))
-            summary = cur.fetchone()
+            summary = cur.fetchone() or {}
+            summary["success_count"] = int(summary.get("total_count") or 0)
+            summary["total_count"] = total
 
         data = []
         for row in rows:
             slot = row.get("slot")
             highlight_blue = False
-            if created_slot is not None and slot is not None and slot in (created_slot, created_slot + 1, created_slot + 2):
-                highlight_blue = True
+            if not int(row.get("is_failed") or 0):
+                if created_slot is not None and slot is not None and slot in (created_slot, created_slot + 1, created_slot + 2):
+                    highlight_blue = True
 
             item = dict(row)
             item["highlight_blue"] = highlight_blue
@@ -1098,6 +1900,7 @@ def api_trades():
             "success": True,
             "summary": {
                 **(summary if summary else {}),
+                "failed_count": failed_total,
                 "created_time": token_row["created_time"].strftime("%Y-%m-%d %H:%M:%S") if token_row and token_row.get("created_time") else None,
                 "created_slot": created_slot
             },
@@ -1218,6 +2021,204 @@ def api_test_dingtalk_push():
         return jsonify({"success": False, "message": f"钉钉测试推送失败: {e}"}), 500
 
 
+@app.route("/api/overview")
+def api_overview():
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM token_stats")
+            token_count = int((cur.fetchone() or {}).get("cnt") or 0)
+            cur.execute("SELECT COUNT(*) AS cnt FROM trades")
+            success_count = int((cur.fetchone() or {}).get("cnt") or 0)
+            cur.execute("SELECT COUNT(*) AS cnt FROM failed_trades_v2")
+            failed_count = int((cur.fetchone() or {}).get("cnt") or 0)
+            cur.execute("SELECT COUNT(DISTINCT mint) AS cnt FROM buyer_profit_60s")
+            settled_60s_count = int((cur.fetchone() or {}).get("cnt") or 0)
+        return jsonify({
+            "success": True,
+            "data": {
+                "token_count": token_count,
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "total_count": success_count + failed_count,
+                "settled_60s_count": settled_60s_count,
+            }
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/second_condition_query", methods=["POST"])
+def api_second_condition_query():
+    data = request.get_json(silent=True) or {}
+    min_profit_sol = float(data.get("min_profit_sol", 0) or 0)
+    min_gas_sol = float(data.get("min_gas_sol", 0) or 0)
+    page = int(data.get("page", 1) or 1)
+    page_size = int(data.get("page_size", 20) or 20)
+
+    conn = get_conn()
+    try:
+        blacklist_rows = list_blacklist_addresses(conn)
+        blacklist_addresses = [x.get("address") for x in blacklist_rows if x.get("address")]
+        result = find_second_condition_candidates(
+            conn=conn,
+            min_profit_sol=min_profit_sol,
+            min_gas_sol=min_gas_sol,
+            blacklist_addresses=blacklist_addresses,
+        )
+        rows = result.get("rows") or []
+        total = len(rows)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged = rows[start:end]
+
+        return jsonify({
+            "success": True,
+            "count": total,
+            "page": page,
+            "page_size": page_size,
+            "first_stage_count": int(result.get("first_stage_count") or 0),
+            "blacklisted_count": int(result.get("blacklisted_count") or 0),
+            "final_count": int(result.get("final_count") or 0),
+            "data": paged,
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/second_push_config", methods=["GET"])
+def api_get_second_push_config():
+    conn = get_conn()
+    try:
+        cfg = get_second_push_config(conn)
+        return jsonify({"success": True, "data": cfg})
+    finally:
+        conn.close()
+
+
+@app.route("/api/second_push_config", methods=["POST"])
+def api_update_second_push_config():
+    data = request.get_json(silent=True) or {}
+    min_profit_sol = float(data.get("min_profit_sol", 0) or 0)
+    min_gas_sol = float(data.get("min_gas_sol", 0) or 0)
+    dingtalk_enabled = 1 if bool(data.get("dingtalk_enabled", True)) else 0
+
+    conn = get_conn()
+    try:
+        update_second_push_config(conn, min_profit_sol, min_gas_sol, dingtalk_enabled)
+        conn.commit()
+        return jsonify({"success": True, "message": "第二逻辑推送参数更新成功"})
+    finally:
+        conn.close()
+
+
+@app.route("/api/test_second_dingtalk_push", methods=["POST"])
+def api_test_second_dingtalk_push():
+    conn = get_conn()
+    try:
+        cfg = get_second_push_config(conn)
+    finally:
+        conn.close()
+
+    content = (
+        "Pump 第二逻辑钉钉推送测试\n"
+        f"时间: {now_str()}\n"
+        f"当前最低利润(SOL): {cfg.get('min_profit_sol')}\n"
+        f"当前最低首笔Gas(SOL): {cfg.get('min_gas_sol')}\n"
+        f"推送开关: {'开启' if int(cfg.get('dingtalk_enabled') or 0) == 1 else '关闭'}"
+    )
+    try:
+        send_dingtalk_text_to_robot(
+            content=content,
+            webhook=SECOND_DINGTALK_WEBHOOK,
+            secret=SECOND_DINGTALK_SECRET,
+            keyword=SECOND_DINGTALK_KEYWORD,
+        )
+        return jsonify({"success": True, "message": "第二钉钉测试推送成功"})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"第二钉钉测试推送失败: {e}"}), 500
+
+
+@app.route("/api/blacklist", methods=["GET"])
+def api_blacklist_list():
+    conn = get_conn()
+    try:
+        rows = list_blacklist_addresses(conn)
+        return jsonify({"success": True, "data": rows})
+    finally:
+        conn.close()
+
+
+@app.route("/api/blacklist/add", methods=["POST"])
+def api_blacklist_add():
+    data = request.get_json(silent=True) or {}
+    address = str(data.get("address") or "").strip()
+    note = str(data.get("note") or "").strip()
+    if not address:
+        return jsonify({"success": False, "message": "地址不能为空"}), 400
+    conn = get_conn()
+    try:
+        add_blacklist_address(conn, address, note)
+        conn.commit()
+        return jsonify({"success": True, "message": "黑名单保存成功"})
+    finally:
+        conn.close()
+
+
+@app.route("/api/blacklist/delete", methods=["POST"])
+def api_blacklist_delete():
+    data = request.get_json(silent=True) or {}
+    address = str(data.get("address") or "").strip()
+    if not address:
+        return jsonify({"success": False, "message": "地址不能为空"}), 400
+    conn = get_conn()
+    try:
+        deleted = delete_blacklist_address(conn, address)
+        conn.commit()
+        return jsonify({"success": True, "message": "删除成功", "deleted": deleted})
+    finally:
+        conn.close()
+
+
+@app.route("/api/cleanup_config", methods=["GET"])
+def api_get_cleanup_config():
+    conn = get_conn()
+    try:
+        cfg = get_cleanup_config(conn)
+        return jsonify({"success": True, "data": cfg})
+    finally:
+        conn.close()
+
+
+@app.route("/api/cleanup_config", methods=["POST"])
+def api_update_cleanup_config():
+    data = request.get_json(silent=True) or {}
+    cleanup_hours = float(data.get("cleanup_hours", 24) or 24)
+    if cleanup_hours <= 0:
+        return jsonify({"success": False, "message": "清理小时数必须大于0"}), 400
+    conn = get_conn()
+    try:
+        update_cleanup_config(conn, cleanup_hours)
+        conn.commit()
+        return jsonify({"success": True, "message": "清理配置更新成功"})
+    finally:
+        conn.close()
+
+
+@app.route("/api/run_cleanup", methods=["POST"])
+def api_run_cleanup():
+    conn = get_conn()
+    try:
+        cfg = get_cleanup_config(conn)
+    finally:
+        conn.close()
+    try:
+        result = cleanup_older_than_hours_once(float(cfg.get("cleanup_hours") or 24), optimize_tables=False)
+        return jsonify({"success": True, "message": "清理完成", "data": result})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"清理失败: {e}"}), 500
+
+
 def start_background_ws():
     t = threading.Thread(target=run_ws_forever, daemon=True)
     t.start()
@@ -1228,8 +2229,14 @@ def start_maintenance_worker():
     t.start()
 
 
+def start_failed_trade_worker():
+    t = threading.Thread(target=run_failed_ws_forever, daemon=True)
+    t.start()
+
+
 if __name__ == "__main__":
     init_db()
     start_background_ws()
     start_maintenance_worker()
+    start_failed_trade_worker()
     app.run(host="0.0.0.0", port=WEB_PORT, debug=False)

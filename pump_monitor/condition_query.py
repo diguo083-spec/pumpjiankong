@@ -170,3 +170,83 @@ def find_first_condition_candidate_for_mint(conn, mint, min_profit_sol, min_gas_
 
     matched.sort(key=lambda x: (x["first_buy_time"] or "", x["buyer_slot"] or 0))
     return matched[0]
+
+
+def _fetch_first_three_block_addresses(conn, mint, created_slot):
+    slot_a = created_slot
+    slot_b = created_slot + 1
+    slot_c = created_slot + 2
+    addresses = set()
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT signer
+            FROM trades
+            WHERE mint = %s
+              AND signer IS NOT NULL
+              AND signer <> ''
+              AND slot IN (%s, %s, %s)
+        """, (mint, slot_a, slot_b, slot_c))
+        for row in cur.fetchall():
+            if row.get("signer"):
+                addresses.add(row["signer"])
+
+        cur.execute("""
+            SELECT DISTINCT signer
+            FROM failed_trades_v2
+            WHERE mint = %s
+              AND signer IS NOT NULL
+              AND signer <> ''
+              AND slot IN (%s, %s, %s)
+        """, (mint, slot_a, slot_b, slot_c))
+        for row in cur.fetchall():
+            if row.get("signer"):
+                addresses.add(row["signer"])
+
+    return addresses
+
+
+def find_second_condition_candidates(conn, min_profit_sol, min_gas_sol, blacklist_addresses):
+    blacklist_set = {x for x in (blacklist_addresses or []) if x}
+    base_rows = find_condition_candidates(conn, min_profit_sol, min_gas_sol)
+
+    final_rows = []
+    blacklisted_count = 0
+
+    for row in base_rows:
+        created_slot = row.get("created_slot")
+        mint = row.get("mint")
+        if created_slot is None or not mint:
+            final_rows.append(row)
+            continue
+
+        hit_addresses = sorted(_fetch_first_three_block_addresses(conn, mint, int(created_slot)) & blacklist_set)
+        if hit_addresses:
+            blacklisted_count += 1
+            continue
+
+        final_rows.append(row)
+
+    return {
+        "first_stage_count": len(base_rows),
+        "blacklisted_count": blacklisted_count,
+        "final_count": len(final_rows),
+        "rows": final_rows,
+    }
+
+
+def find_first_second_condition_candidate_for_mint(conn, mint, min_profit_sol, min_gas_sol, blacklist_addresses):
+    candidate = find_first_condition_candidate_for_mint(conn, mint, min_profit_sol, min_gas_sol)
+    if not candidate:
+        return None
+
+    blacklist_set = {x for x in (blacklist_addresses or []) if x}
+    created_slot = candidate.get("created_slot")
+    if created_slot is None:
+        return candidate
+
+    hit_addresses = sorted(_fetch_first_three_block_addresses(conn, mint, int(created_slot)) & blacklist_set)
+    if hit_addresses:
+        return None
+
+    return candidate

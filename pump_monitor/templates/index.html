@@ -307,6 +307,8 @@
         <button class="btn" onclick="reloadTokens()">搜索</button>
     </div>
 
+    <div id="overviewBox" class="summary-box" style="margin-bottom: 16px;"></div>
+
     <div class="push-panel">
         <div class="push-header">钉钉推送设置</div>
         <div class="push-body">
@@ -374,6 +376,125 @@
                     <span id="conditionPageInfo" class="muted">-</span>
                     <button id="conditionNextBtn" onclick="changeConditionPage(1)">下一页</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="push-panel">
+        <div class="push-header">第二逻辑推送设置</div>
+        <div class="push-body">
+            <div class="push-row">
+                <div class="push-item">
+                    <div class="push-label">最低利润（SOL）</div>
+                    <input id="secondPushMinProfit" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <div class="push-item">
+                    <div class="push-label">最低首笔买入Gas（SOL）</div>
+                    <input id="secondPushMinGas" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <div class="push-item">
+                    <div class="push-label">推送开关</div>
+                    <label class="switch-line">
+                        <input id="secondPushEnabled" type="checkbox">
+                        <span>启用第二钉钉推送</span>
+                    </label>
+                </div>
+                <button class="btn" onclick="saveSecondPushConfig()">一键更新第二逻辑参数</button>
+                <button class="btn" onclick="testSecondDingtalkPush()">第二钉钉推送测试</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="condition-panel">
+        <div class="condition-header">第二逻辑筛选（第一道与原条件查询完全一致，第二道为黑名单过滤）</div>
+        <div class="condition-body">
+            <div class="condition-row">
+                <div class="condition-item">
+                    <div class="condition-label">最低利润（SOL）</div>
+                    <input id="secondConditionMinProfit" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <div class="condition-item">
+                    <div class="condition-label">最低首笔买入Gas（SOL）</div>
+                    <input id="secondConditionMinGas" class="small-input" type="number" step="0.000001" value="0">
+                </div>
+                <button class="btn" onclick="runSecondConditionQuery(1)">开始查询</button>
+            </div>
+
+            <div class="condition-result-panel">
+                <div class="condition-result-header">第二逻辑查询结果</div>
+                <div id="secondConditionSummary" class="condition-summary"></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>代币合约</th>
+                            <th>创建者</th>
+                            <th>创建时间</th>
+                            <th>创建区块</th>
+                            <th>符合条件的交易者</th>
+                            <th>利润(SOL)</th>
+                            <th>首笔买入Gas(SOL)</th>
+                            <th>区块</th>
+                        </tr>
+                        </thead>
+                        <tbody id="secondConditionTableBody">
+                        <tr><td colspan="8" class="empty">请点击开始查询</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pager">
+                    <button id="secondConditionPrevBtn" onclick="changeSecondConditionPage(-1)">上一页</button>
+                    <span id="secondConditionPageInfo" class="muted">-</span>
+                    <button id="secondConditionNextBtn" onclick="changeSecondConditionPage(1)">下一页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="condition-panel">
+        <div class="condition-header">黑名单管理</div>
+        <div class="condition-body">
+            <div class="condition-row">
+                <div class="condition-item">
+                    <div class="condition-label">地址</div>
+                    <input id="blacklistAddress" class="input" style="width:360px;" placeholder="输入交易者地址">
+                </div>
+                <div class="condition-item">
+                    <div class="condition-label">备注</div>
+                    <input id="blacklistNote" class="input" style="width:240px;" placeholder="可选备注">
+                </div>
+                <button class="btn" onclick="addBlacklist()">新增/更新</button>
+                <button class="btn" onclick="loadBlacklist()">刷新黑名单</button>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>地址</th>
+                        <th>备注</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                    </thead>
+                    <tbody id="blacklistTableBody">
+                    <tr><td colspan="4" class="empty">暂无黑名单</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="push-panel">
+        <div class="push-header">数据库清理设置</div>
+        <div class="push-body">
+            <div class="push-row">
+                <div class="push-item">
+                    <div class="push-label">清理多少小时前的数据</div>
+                    <input id="cleanupHours" class="small-input" type="number" step="1" min="1" value="24">
+                </div>
+                <button class="btn" onclick="saveCleanupConfig()">保存清理参数</button>
+                <button class="btn" onclick="runCleanupNow()">立即执行清理</button>
+                <div id="cleanupInfo" class="muted"></div>
             </div>
         </div>
     </div>
@@ -458,6 +579,10 @@
     const conditionPageSize = 20;
     let conditionTotal = 0;
 
+    let secondConditionPage = 1;
+    const secondConditionPageSize = 20;
+    let secondConditionTotal = 0;
+
     let currentMint = "";
 
     function formatNum(v, digits = 6) {
@@ -516,6 +641,198 @@
         alert(data.message || (data.success ? "测试成功" : "测试失败"));
     }
 
+
+    async function loadOverview() {
+        const res = await fetchJson("/api/overview");
+        if (!res.success) return;
+        const data = res.data || {};
+        document.getElementById("overviewBox").innerHTML = `
+            <div class="summary-card"><div class="summary-title">代币总数</div><div class="summary-value">${data.token_count || 0}</div></div>
+            <div class="summary-card"><div class="summary-title">成功交易总数</div><div class="summary-value buy">${data.success_count || 0}</div></div>
+            <div class="summary-card"><div class="summary-title">失败交易总数</div><div class="summary-value failed">${data.failed_count || 0}</div></div>
+            <div class="summary-card"><div class="summary-title">总交易数</div><div class="summary-value">${data.total_count || 0}</div></div>
+            <div class="summary-card"><div class="summary-title">已完成60秒结算</div><div class="summary-value">${data.settled_60s_count || 0}</div></div>
+        `;
+    }
+
+    async function loadSecondPushConfig() {
+        const res = await fetchJson("/api/second_push_config");
+        if (!res.success) return;
+        const cfg = res.data || {};
+        document.getElementById("secondPushMinProfit").value = cfg.min_profit_sol ?? 0;
+        document.getElementById("secondPushMinGas").value = cfg.min_gas_sol ?? 0;
+        document.getElementById("secondPushEnabled").checked = Number(cfg.dingtalk_enabled || 0) === 1;
+        document.getElementById("secondConditionMinProfit").value = cfg.min_profit_sol ?? 0;
+        document.getElementById("secondConditionMinGas").value = cfg.min_gas_sol ?? 0;
+    }
+
+    async function saveSecondPushConfig() {
+        const minProfit = Number(document.getElementById("secondPushMinProfit").value || 0);
+        const minGas = Number(document.getElementById("secondPushMinGas").value || 0);
+        const enabled = document.getElementById("secondPushEnabled").checked;
+        const res = await fetch("/api/second_push_config", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ min_profit_sol: minProfit, min_gas_sol: minGas, dingtalk_enabled: enabled })
+        });
+        const data = await res.json();
+        document.getElementById("secondConditionMinProfit").value = minProfit;
+        document.getElementById("secondConditionMinGas").value = minGas;
+        alert(data.message || (data.success ? "更新成功" : "更新失败"));
+    }
+
+    async function testSecondDingtalkPush() {
+        const res = await fetch("/api/test_second_dingtalk_push", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"}
+        });
+        const data = await res.json();
+        alert(data.message || (data.success ? "测试成功" : "测试失败"));
+    }
+
+    async function runSecondConditionQuery(page = 1) {
+        secondConditionPage = page;
+        const minProfit = Number(document.getElementById("secondConditionMinProfit").value || 0);
+        const minGas = Number(document.getElementById("secondConditionMinGas").value || 0);
+        const summaryEl = document.getElementById("secondConditionSummary");
+        const bodyEl = document.getElementById("secondConditionTableBody");
+        summaryEl.innerHTML = `<div><span>状态</span>查询中...</div>`;
+        bodyEl.innerHTML = `<tr><td colspan="8" class="empty">查询中...</td></tr>`;
+
+        const res = await fetch("/api/second_condition_query", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ min_profit_sol: minProfit, min_gas_sol: minGas, page: secondConditionPage, page_size: secondConditionPageSize })
+        });
+        const data = await res.json();
+        if (!data.success) {
+            summaryEl.innerHTML = `<div><span>状态</span>查询失败</div>`;
+            bodyEl.innerHTML = `<tr><td colspan="8" class="empty">查询失败</td></tr>`;
+            return;
+        }
+        secondConditionTotal = data.count || 0;
+        summaryEl.innerHTML = `
+            <div><span>第一道筛选命中</span>${data.first_stage_count || 0}</div>
+            <div><span>黑名单过滤掉</span>${data.blacklisted_count || 0}</div>
+            <div><span>最终通过</span>${data.final_count || 0}</div>
+            <div><span>最低利润</span>${formatNum(minProfit, 6)} SOL</div>
+            <div><span>最低首笔Gas</span>${formatNum(minGas, 6)} SOL</div>
+        `;
+        const rows = data.data || [];
+        if (!rows.length) {
+            bodyEl.innerHTML = `<tr><td colspan="8" class="empty">暂无符合条件的数据</td></tr>`;
+        } else {
+            bodyEl.innerHTML = rows.map(row => `
+                <tr>
+                    <td>${row.mint || '-'}</td>
+                    <td>${row.creator || '-'}</td>
+                    <td>${row.created_time || '-'}</td>
+                    <td>${row.created_slot ?? '-'}</td>
+                    <td>${row.buyer || '-'}</td>
+                    <td class="${Number(row.profit_sol || 0) >= 0 ? 'profit-pos' : 'profit-neg'}">${formatNum(row.profit_sol || 0, 6)}</td>
+                    <td>${formatNum(row.gas_sol || 0, 6)}</td>
+                    <td>${row.buyer_slot ?? '-'}</td>
+                </tr>
+            `).join("");
+        }
+        const totalPages = Math.max(1, Math.ceil(secondConditionTotal / secondConditionPageSize));
+        document.getElementById("secondConditionPageInfo").innerText = `第 ${secondConditionPage} / ${totalPages} 页，共 ${secondConditionTotal} 条`;
+        document.getElementById("secondConditionPrevBtn").disabled = secondConditionPage <= 1;
+        document.getElementById("secondConditionNextBtn").disabled = secondConditionPage >= totalPages;
+    }
+
+    function changeSecondConditionPage(delta) {
+        const totalPages = Math.max(1, Math.ceil(secondConditionTotal / secondConditionPageSize));
+        const next = secondConditionPage + delta;
+        if (next < 1 || next > totalPages) return;
+        runSecondConditionQuery(next);
+    }
+
+    async function loadBlacklist() {
+        const res = await fetchJson("/api/blacklist");
+        if (!res.success) return;
+        const rows = res.data || [];
+        const body = document.getElementById("blacklistTableBody");
+        if (!rows.length) {
+            body.innerHTML = `<tr><td colspan="4" class="empty">暂无黑名单</td></tr>`;
+            return;
+        }
+        body.innerHTML = rows.map(row => `
+            <tr>
+                <td title="${row.address || ''}">${row.address || '-'}</td>
+                <td>${row.note || '-'}</td>
+                <td>${row.created_at || '-'}</td>
+                <td><button class="btn" onclick="deleteBlacklist('${row.address}')">删除</button></td>
+            </tr>
+        `).join("");
+    }
+
+    async function addBlacklist() {
+        const address = document.getElementById("blacklistAddress").value.trim();
+        const note = document.getElementById("blacklistNote").value.trim();
+        if (!address) {
+            alert("地址不能为空");
+            return;
+        }
+        const res = await fetch('/api/blacklist/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({address, note})
+        });
+        const data = await res.json();
+        alert(data.message || (data.success ? '保存成功' : '保存失败'));
+        if (data.success) {
+            document.getElementById("blacklistAddress").value = '';
+            document.getElementById("blacklistNote").value = '';
+            loadBlacklist();
+        }
+    }
+
+    async function deleteBlacklist(address) {
+        const res = await fetch('/api/blacklist/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({address})
+        });
+        const data = await res.json();
+        alert(data.message || (data.success ? '删除成功' : '删除失败'));
+        if (data.success) loadBlacklist();
+    }
+
+    async function loadCleanupConfig() {
+        const res = await fetchJson('/api/cleanup_config');
+        if (!res.success) return;
+        const cfg = res.data || {};
+        document.getElementById('cleanupHours').value = cfg.cleanup_hours ?? 24;
+        document.getElementById('cleanupInfo').innerText = cfg.updated_at ? `最近更新时间: ${cfg.updated_at}` : '';
+    }
+
+    async function saveCleanupConfig() {
+        const cleanupHours = Number(document.getElementById('cleanupHours').value || 24);
+        const res = await fetch('/api/cleanup_config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cleanup_hours: cleanupHours})
+        });
+        const data = await res.json();
+        alert(data.message || (data.success ? '更新成功' : '更新失败'));
+        if (data.success) loadCleanupConfig();
+    }
+
+    async function runCleanupNow() {
+        const res = await fetch('/api/run_cleanup', { method: 'POST', headers: {'Content-Type': 'application/json'} });
+        const data = await res.json();
+        alert(data.message || (data.success ? '清理成功' : '清理失败'));
+        if (data.success) {
+            loadOverview();
+            loadTokens();
+            if (currentMint) {
+                loadTrades();
+                loadProfit60s();
+            }
+        }
+    }
+
     async function loadTokens() {
         const keyword = document.getElementById("keyword").value.trim();
         const url = `/api/tokens?page=${tokenPage}&page_size=${tokenPageSize}&keyword=${encodeURIComponent(keyword)}`;
@@ -540,6 +857,9 @@
                         <div>最后: ${item.last_seen || '-'}</div>
                         <div>买入笔数: ${item.buy_count || 0}</div>
                         <div>卖出笔数: ${item.sell_count || 0}</div>
+                        <div>成功条数: <span class="buy">${item.success_count || 0}</span></div>
+                        <div>失败条数: <span class="${Number(item.failed_count || 0) > 0 ? 'failed' : 'muted'}">${item.failed_count || 0}</span></div>
+                        <div>总条数: ${item.total_count || 0}</div>
                         <div>买入SOL: ${formatNum(item.buy_sol || 0, 4)}</div>
                         <div>卖出SOL: ${formatNum(item.sell_sol || 0, 4)}</div>
                     </div>
@@ -798,12 +1118,18 @@
     });
 
     loadPushConfig();
+    loadSecondPushConfig();
+    loadCleanupConfig();
+    loadBlacklist();
+    loadOverview();
     loadTokens();
     loadTrades();
     loadProfit60s();
     runConditionQuery(1);
+    runSecondConditionQuery(1);
 
     setInterval(() => {
+        loadOverview();
         loadTokens();
         if (currentMint) {
             loadTrades();
